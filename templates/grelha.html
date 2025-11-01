@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>📅 Grelha de Programas — Rádio Pulse</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <header class="topbar">
+    <div class="logo">
+      <span>🎵</span>
+      <div>
+        <h1>Rádio Pulse</h1>
+        <p>📅 Programação Diária</p>
+      </div>
+    </div>
+    <div class="right">
+      <a href="/" class="grelha-btn">🏠 Voltar à Emissão</a>
+    </div>
+  </header>
+
+  <main class="grelha-container">
+    <h2>Programação de Hoje</h2>
+
+    <div class="grelha-grid">
+      {% for p in programas %}
+        <div class="grelha-card {% if p.inicio <= hora_atual < p.fim or (p.inicio > p.fim and (hora_atual >= p.inicio or hora_atual < p.fim)) %}agora{% endif %}">
+          <div class="hora">{{ p.inicio }}h – {{ p.fim }}h</div>
+          <div class="titulo">{{ p.nome }}</div>
+          <div class="desc">{{ p.descricao }}</div>
+        </div>
+      {% endfor %}
+    </div>
+  </main>
+
+  <footer>© 2025 Rádio Pulse — O ritmo da tua geração</footer>
+</body>
+</html>

@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>🎧 Rádio Pulse — O Ritmo da Tua Geração</title>
+
+  <!-- CSS principal -->
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+
+  <!-- Favicon opcional -->
+  <link rel="icon" href="https://upload.wikimedia.org/wikipedia/commons/5/54/Radio_icon.svg" type="image/svg+xml">
+</head>
+<body>
+  <!-- 🔹 TOPO -->
+  <header class="topbar">
+    <div class="logo">
+      <span>🎵</span>
+      <div>
+        <h1>Rádio Pulse <span id="weatherIcon">☀️</span></h1>
+        <p>O ritmo da tua geração</p>
+      </div>
+    </div>
+
+    <div class="right">
+      <div id="datetime">—</div>
+      <div id="weather" class="weather">🌤️ Lisboa • — °C</div>
+      <a href="/grelha" class="grelha-btn">📅 Grelha</a>
+    </div>
+  </header>
+
+  <!-- 🔹 CONTEÚDO PRINCIPAL -->
+  <main class="container">
+    <h2 id="progNome">—</h2>
+    <p id="progDesc" class="desc">—</p>
+    <p id="proximoTxt" class="proximo">—</p>
+
+    <div id="trackNow" class="track-info tocando">🎧 Tocando</div>
+
+    <canvas id="equalizer" width="700" height="90"></canvas>
+
+    <audio id="player" autoplay controls crossorigin="anonymous"></audio>
+
+    <!-- Botão modo automático (opcional, se quiseres de volta) -->
+    <div class="controls">
+      <button id="autoBtn" class="grelha-btn" style="margin-top:14px;">🔄 Modo Automático</button>
+    </div>
+  </main>
+
+  <!-- 🔹 LOGS -->
+  <div id="logPanel" class="log-panel" style="display:block;">
+    <div class="log-title">
+      📡 Rádio Pulse — Logs
+      <button id="toggleLogs" class="toggle-logs">✖ Ocultar</button>
+    </div>
+    <div id="logContent"></div>
+  </div>
+
+  <button id="showLogsBtn" class="show-logs" style="display:none;">📋 Mostrar Logs</button>
+
+  <!-- 🔹 RODAPÉ -->
+  <footer>© 2025 Rádio Pulse — O ritmo da tua geração</footer>
+
+  <!-- JS principal -->
+  <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>
