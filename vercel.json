@@ -3,38 +3,13 @@
   "builds": [
     {
       "src": "app.py",
-      "use": "@vercel/python",
-      "config": {
-        "runtime": "python3.11",
-        "maxLambdaSize": "50mb"
-      }
-    },
-    {
-      "src": "static/**/*",
-      "use": "@vercel/static"
-    },
-    {
-      "src": "templates/**/*",
-      "use": "@vercel/static"
+      "use": "@vercel/python"
     }
   ],
   "routes": [
     {
-      "src": "/static/(.*)",
-      "dest": "/static/$1"
-    },
-    {
       "src": "/(.*)",
       "dest": "app.py"
     }
-  ],
-  "env": {
-    "PYTHONUNBUFFERED": "1",
-    "TZ": "Europe/Lisbon"
-  },
-  "regions": ["fra1"],
-  "installCommand": "pip install -r requirements.txt",
-  "buildCommand": "echo '🚀 A iniciar build da Rádio Pulse...' && pip install -r requirements.txt",
-  "outputDirectory": ".",
-  "public": true
+  ]
 }
