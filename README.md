@@ -113,3 +113,10 @@ A aplicação está preparada para Vercel, mas a identificação por áudio depe
 Nesta versão o player foi corrigido para evitar um problema comum dos browsers: quando um stream externo de rádio é ligado ao WebAudio para fazer equalizer real, muitos servidores não enviam permissões CORS e o resultado pode ser silêncio. Agora o player toca diretamente no `<audio>` e o equalizer fica visual/animado, sem cortar o som.
 
 Também foi removido o `crossorigin="anonymous"` do player e a identificação automática só arranca depois de a rádio estar a tocar, para não bloquear a app localmente.
+
+## Correção Vercel — variável TZ
+
+A Vercel não permite configurar a variável `TZ`, porque é reservada pelo runtime.
+Esta versão já removeu `TZ` do `vercel.json`. A app continua a usar a hora de Portugal diretamente no código com `pytz.timezone("Europe/Lisbon")`.
+
+No painel da Vercel, não cries a variável `TZ`.

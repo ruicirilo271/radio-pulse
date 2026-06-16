@@ -10,16 +10,23 @@
     }
   ],
   "routes": [
-    { "src": "/static/(.*)", "dest": "/static/$1" },
-    { "src": "/(.*)", "dest": "/app.py" }
+    {
+      "src": "/static/(.*)",
+      "dest": "/static/$1"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "/app.py"
+    }
   ],
   "env": {
     "PYTHONUNBUFFERED": "1",
-    "TZ": "Europe/Lisbon",
     "SHAZAM_SAMPLE_SECONDS": "8",
     "SHAZAM_WARMUP_SECONDS": "1",
     "SHAZAM_ATTEMPTS": "1",
     "TRACK_CACHE_TTL": "90"
   },
-  "regions": ["fra1"]
+  "regions": [
+    "fra1"
+  ]
 }
