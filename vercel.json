@@ -3,13 +3,23 @@
   "builds": [
     {
       "src": "app.py",
-      "use": "@vercel/python"
+      "use": "@vercel/python",
+      "config": {
+        "runtime": "python3.11"
+      }
     }
   ],
   "routes": [
-    {
-      "src": "/(.*)",
-      "dest": "app.py"
-    }
-  ]
+    { "src": "/static/(.*)", "dest": "/static/$1" },
+    { "src": "/(.*)", "dest": "/app.py" }
+  ],
+  "env": {
+    "PYTHONUNBUFFERED": "1",
+    "TZ": "Europe/Lisbon",
+    "SHAZAM_SAMPLE_SECONDS": "8",
+    "SHAZAM_WARMUP_SECONDS": "1",
+    "SHAZAM_ATTEMPTS": "1",
+    "TRACK_CACHE_TTL": "90"
+  },
+  "regions": ["fra1"]
 }

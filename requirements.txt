@@ -1,15 +1,9 @@
-# --- Base web framework ---
 Flask==3.0.3
-
-# --- HTML parsing / Scraping ---
+Werkzeug==3.0.3
 requests==2.32.3
 beautifulsoup4==4.12.3
-
-# --- Timezone e data ---
 pytz==2024.1
-
-# --- Servidor local / debug ---
-Werkzeug==3.0.3
-
-# --- (Opcional) se fores hospedar no Vercel / Render ---
 gunicorn==23.0.0
+shazamio==0.8.1
+aiohttp==3.9.5
+imageio-ffmpeg==0.5.1

@@ -1,34 +1,68 @@
 document.addEventListener("DOMContentLoaded", () => {
-  const progNome = document.getElementById("progNome");
-  const progDesc = document.getElementById("progDesc");
-  const proximoTxt = document.getElementById("proximoTxt");
-  const player = document.getElementById("player");
-  const canvas = document.getElementById("equalizer");
+  const DEFAULT_COVER = window.DEFAULT_COVER_URL || "/static/default_cover.png";
+  const $ = (id) => document.getElementById(id);
+
+  const progNome = $("progNome");
+  const progDesc = $("progDesc");
+  const proximoTxt = $("proximoTxt");
+  const stationLabel = $("stationLabel");
+  const player = $("player");
+  const canvas = $("equalizer");
   const ctx = canvas.getContext("2d");
-  const autoBtn = document.getElementById("autoBtn");
-  const logContent = document.getElementById("logContent");
-  const logPanel = document.getElementById("logPanel");
-  const toggleLogs = document.getElementById("toggleLogs");
-  const showLogsBtn = document.getElementById("showLogsBtn");
-  const weatherEl = document.getElementById("weather");
-  const datetime = document.getElementById("datetime");
-  const trackNow = document.getElementById("trackNow");
+  const autoBtn = $("autoBtn");
+  const playBtn = $("playBtn");
+  const identifyBtn = $("identifyBtn");
+  const logContent = $("logContent");
+  const logPanel = $("logPanel");
+  const toggleLogs = $("toggleLogs");
+  const showLogsBtn = $("showLogsBtn");
+  const weatherEl = $("weather");
+  const datetime = $("datetime");
+  const trackNow = $("trackNow");
+  const trackMeta = $("trackMeta");
+  const shazamStatus = $("shazamStatus");
+  const coverArt = $("coverArt");
+  const coverFallback = $("coverFallback");
+  const defaultCoverImg = $("defaultCoverImg");
 
-  let auto = true, lastProgram = null, hls = null;
-  let audioCtx, analyser, source, dataArray, smoothArray;
+  if (defaultCoverImg) defaultCoverImg.src = DEFAULT_COVER;
 
-  // Hora
-  setInterval(() => {
-    const agora = new Date();
-    datetime.textContent = agora.toLocaleString("pt-PT", {
-      weekday: "long",
+  let auto = true;
+  let lastProgramName = null;
+  let currentProgram = null;
+  let currentStreamUrl = "";
+  let hls = null;
+  let userStarted = false;
+  let identifying = false;
+  let eqStarted = false;
+
+  function log(msg) {
+    const ts = new Date().toLocaleTimeString("pt-PT", { hour12: false });
+    const line = document.createElement("div");
+    line.innerHTML = `<b>[${ts}]</b> ${msg}`;
+    logContent.prepend(line);
+
+    while (logContent.childElementCount > 35) logContent.lastChild.remove();
+  }
+
+  function setStatus(text, mode = "idle") {
+    shazamStatus.textContent = text;
+    shazamStatus.dataset.mode = mode;
+  }
+
+  function updateClock() {
+    const now = new Date();
+    datetime.textContent = now.toLocaleString("pt-PT", {
+      weekday: "short",
       hour: "2-digit",
       minute: "2-digit",
       second: "2-digit",
     });
-  }, 1000);
+  }
 
-  // Meteo
+  updateClock();
+  setInterval(updateClock, 1000);
+
   async function atualizarTempo() {
     try {
       const resp = await fetch(
@@ -44,7 +78,7 @@ document.addEventListener("DOMContentLoaded", () => {
       if ([0, 1].includes(code)) ic = isDay ? "☀️" : "🌙";
       else if ([2, 3].includes(code)) ic = "🌤️";
       else if ([45, 48].includes(code)) ic = "🌫️";
-      else if ([51, 53, 55, 61, 63, 65].includes(code)) ic = "🌧️";
+      else if ([51, 53, 55, 61, 63, 65, 80, 81, 82].includes(code)) ic = "🌧️";
       else if ([95, 96, 99].includes(code)) ic = "⛈️";
 
       weatherEl.textContent = `${ic} Lisboa • ${t.toFixed(1)} °C`;
@@ -52,173 +86,284 @@ document.addEventListener("DOMContentLoaded", () => {
       weatherEl.textContent = "🌤️ Lisboa • — °C";
     }
   }
+
   atualizarTempo();
   setInterval(atualizarTempo, 15 * 60 * 1000);
 
-  // Logs
-  function log(msg) {
-    const ts = new Date().toLocaleTimeString("pt-PT", { hour12: false });
-    const line = document.createElement("div");
-    line.textContent = `[${ts}] ${msg}`;
-    logContent.prepend(line);
-    if (logContent.childElementCount > 20) logContent.lastChild.remove();
-  }
-
-  // === Novo sistema de abrir/fechar consola ===
   if (toggleLogs && showLogsBtn && logPanel) {
-    // Ocultar
     toggleLogs.onclick = () => {
-      logPanel.style.display = "none";
+      logPanel.classList.add("closed");
       showLogsBtn.style.display = "block";
     };
-
-    // Mostrar
     showLogsBtn.onclick = () => {
-      logPanel.style.display = "block";
+      logPanel.classList.remove("closed");
       showLogsBtn.style.display = "none";
     };
   }
 
-  // Player
-  async function playStream(url) {
+  function resizeCanvas() {
+    const rect = canvas.getBoundingClientRect();
+    const ratio = window.devicePixelRatio || 1;
+    canvas.width = Math.floor(rect.width * ratio);
+    canvas.height = Math.floor(rect.height * ratio);
+    ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+  }
+
+  resizeCanvas();
+  window.addEventListener("resize", resizeCanvas);
+
+  function roundRect(c, x, y, width, height, radius) {
+    const r = Math.min(radius, width / 2, height / 2);
+    c.beginPath();
+    c.moveTo(x + r, y);
+    c.arcTo(x + width, y, x + width, y + height, r);
+    c.arcTo(x + width, y + height, x, y + height, r);
+    c.arcTo(x, y + height, x, y, r);
+    c.arcTo(x, y, x + width, y, r);
+    c.closePath();
+  }
+
+  // IMPORTANTE:
+  // Não usamos createMediaElementSource/WebAudio para o equalizer.
+  // Muitos streams de rádio não enviam CORS e o browser fica sem som quando
+  // o áudio é ligado ao WebAudio. Assim a rádio toca sempre e o equalizer anima.
+  function drawEq() {
+    requestAnimationFrame(drawEq);
+
+    const rect = canvas.getBoundingClientRect();
+    const w = rect.width;
+    const h = rect.height;
+    const bars = player.paused ? 76 : 92;
+    const now = performance.now();
+
+    ctx.clearRect(0, 0, w, h);
+
+    for (let i = 0; i < bars; i++) {
+      const x = (i * w) / bars;
+      const base = player.paused ? 0.20 : 0.42;
+      const wave1 = Math.sin(i * 0.38 + now / 310) * 0.5 + 0.5;
+      const wave2 = Math.sin(i * 0.11 + now / 170) * 0.5 + 0.5;
+      const pulse = player.paused ? wave1 * 0.16 : (wave1 * 0.55 + wave2 * 0.45);
+      const bh = Math.max(6, (base + pulse * 0.72) * h * (player.paused ? 0.45 : 0.95));
+      const hue = (188 + i * 2.7 + now / 45) % 360;
+
+      ctx.shadowColor = `hsla(${hue}, 100%, 65%, ${player.paused ? ".25" : ".70"})`;
+      ctx.shadowBlur = player.paused ? 8 : 16;
+
+      const grad = ctx.createLinearGradient(0, h - bh, 0, h);
+      grad.addColorStop(0, `hsl(${hue}, 100%, 72%)`);
+      grad.addColorStop(0.55, `hsl(${(hue + 55) % 360}, 100%, 58%)`);
+      grad.addColorStop(1, `hsl(${(hue + 110) % 360}, 100%, 44%)`);
+
+      ctx.fillStyle = grad;
+      roundRect(ctx, x + 2, h - bh, Math.max(3, w / bars - 4), bh, 9);
+      ctx.fill();
+    }
+
+    ctx.shadowBlur = 0;
+  }
+
+  if (!eqStarted) {
+    eqStarted = true;
+    drawEq();
+  }
+
+  function resetTrack(title, meta) {
+    trackNow.textContent = title;
+    trackNow.classList.add("tocando");
+    trackMeta.textContent = meta || "";
+    coverArt.hidden = true;
+    coverArt.removeAttribute("src");
+    if (defaultCoverImg) defaultCoverImg.src = DEFAULT_COVER;
+    coverFallback.hidden = false;
+  }
+
+  function setPlayerSource(url) {
     if (!url) return;
+
     if (hls) {
       hls.destroy();
       hls = null;
     }
-    if (url.endsWith(".m3u8") && Hls.isSupported()) {
-      hls = new Hls();
+
+    currentStreamUrl = url;
+
+    if (url.includes(".m3u8") && window.Hls && Hls.isSupported()) {
+      hls = new Hls({ enableWorker: true, lowLatencyMode: true });
       hls.loadSource(url);
       hls.attachMedia(player);
     } else {
-      player.src = url;
+      if (player.src !== url) {
+        player.src = url;
+        player.load();
+      }
     }
-    player.play().catch(() => {});
   }
 
-  // Equalizer
-  // 🎛️ Equalizer Profissional — efeito onda suave
-function initEq() {
-  if (audioCtx) return;
-  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-  analyser = audioCtx.createAnalyser();
-  analyser.fftSize = 256; // resolução mais alta = movimento mais suave
-  analyser.minDecibels = -90;
-  analyser.maxDecibels = -10;
-  analyser.smoothingTimeConstant = 0.8; // suavização entre frames
-  source = audioCtx.createMediaElementSource(player);
-  source.connect(analyser);
-  analyser.connect(audioCtx.destination);
-  dataArray = new Uint8Array(analyser.frequencyBinCount);
-  smoothArray = new Float32Array(analyser.frequencyBinCount);
-  drawEq();
-}
+  async function startPlayback() {
+    if (!currentStreamUrl && currentProgram?.url) {
+      setPlayerSource(currentProgram.url);
+    }
 
-function drawEq() {
-  requestAnimationFrame(drawEq);
-  if (!analyser) return;
+    if (!player.src && !hls) {
+      log("⚠️ Ainda não há stream carregado. A atualizar programa...");
+      await atualizarPrograma(true, true);
+    }
 
-  analyser.getByteFrequencyData(dataArray);
-  const w = canvas.width,
-        h = canvas.height,
-        bars = 60,                     // número de barras visíveis
-        step = Math.floor(dataArray.length / bars);
-
-  ctx.clearRect(0, 0, w, h);
-
-  for (let i = 0; i < bars; i++) {
-    // média local para suavizar
-    let avg = 0;
-    for (let j = 0; j < step; j++) avg += dataArray[i * step + j];
-    avg /= step;
-
-    // suavização temporal (muito mais fluido)
-    smoothArray[i] += (avg - smoothArray[i]) * 0.1;
-
-    // altura proporcional à energia
-   const bh = (smoothArray[i] / 255) * h * 1.8;
-
- // controla o “volume visual”
-
-    // cor dinâmica com gradiente “onda”
-    const hue = (i * 6 + Date.now() / 40) % 360;
-    const gradient = ctx.createLinearGradient(0, h - bh, 0, h);
-    gradient.addColorStop(0, `hsl(${hue},100%,65%)`);
-    gradient.addColorStop(1, `hsl(${(hue + 40) % 360},100%,40%)`);
-    ctx.fillStyle = gradient;
-
-    const x = (i * w) / bars;
-    ctx.fillRect(x, h - bh, w / bars - 2, bh);
+    try {
+      await player.play();
+      playBtn.textContent = "⏸ Pausar rádio";
+      setStatus("Rádio ligada. Podes identificar com Shazam.", "ok");
+      log("✅ Rádio ligada.");
+    } catch (err) {
+      console.error(err);
+      playBtn.textContent = "▶ Ligar rádio";
+      setStatus("O browser não conseguiu iniciar o stream. Tenta clicar outra vez.", "error");
+      log("❌ Não consegui iniciar o stream. Clica novamente em Ligar rádio.");
+    }
   }
-
-  // efeito de fade no fundo (ligeiro rasto)
-  ctx.fillStyle = "rgba(0,0,0,0.05)";
-  ctx.fillRect(0, 0, w, h);
-}
-
-
 
   player.addEventListener("play", () => {
-    initEq();
-    audioCtx.resume();
+    playBtn.textContent = "⏸ Pausar rádio";
   });
 
-  // Atualiza programa
-  async function atualizarPrograma() {
-    if (!auto) return;
-    const res = await fetch("/programa_atual");
-    if (!res.ok) return;
-    const data = await res.json();
-    const atual = data.atual, prox = data.proximo;
-   if (!lastProgram || lastProgram.nome !== atual.nome) {
-      log(`🎙 Mudou para: ${atual.nome}`);
+  player.addEventListener("playing", () => {
+    playBtn.textContent = "⏸ Pausar rádio";
+    setStatus("Rádio ligada. Podes identificar com Shazam.", "ok");
+  });
+
+  player.addEventListener("pause", () => {
+    playBtn.textContent = "▶ Ligar rádio";
+  });
+
+  player.addEventListener("waiting", () => log("⏳ A carregar buffer da rádio..."));
+  player.addEventListener("stalled", () => log("⚠️ O stream ficou em espera. A tentar continuar..."));
+  player.addEventListener("error", () => {
+    const code = player.error?.code || "?";
+    log(`❌ Erro no player de áudio. Código: ${code}`);
+    setStatus("Erro no player de áudio. Experimenta recarregar a página.", "error");
+  });
+
+  playBtn.onclick = async () => {
+    userStarted = true;
+
+    if (player.paused) {
+      await atualizarPrograma(true, true);
+      await startPlayback();
+    } else {
+      player.pause();
+      log("⏸ Rádio em pausa.");
+    }
+  };
+
+  async function atualizarPrograma(forcePlay = false, forceReload = false) {
+    if (!auto && !forcePlay) return;
+
+    try {
+      const res = await fetch("/programa_atual", { cache: "no-store" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+      const data = await res.json();
+      const atual = data.atual;
+      const prox = data.proximo;
+
+      currentProgram = atual;
+      stationLabel.textContent = `${atual.radio} • emissão automática`;
       progNome.textContent = atual.nome;
       progDesc.textContent = atual.descricao;
-      playStream(atual.url);
-      lastProgram = atual;
+      proximoTxt.textContent = `⏭ Próximo: ${prox.nome} às ${String(prox.inicio).padStart(2, "0")}h`;
 
-  // 🔹 Limpa a faixa anterior (novo programa, novo stream)
-      trackNow.textContent = "🎧 Tocando";
-      trackNow.classList.add("tocando");
- }
+      const changed = lastProgramName !== atual.nome;
+      if (forceReload || changed || !currentStreamUrl) {
+        log(`🎙️ Programa ativo: ${atual.nome} (${atual.radio})`);
+        setPlayerSource(atual.url);
+        lastProgramName = atual.nome;
 
+        if (changed) {
+          resetTrack("🎧 A aguardar identificação…", "Novo programa carregado.");
+        }
 
-    proximoTxt.textContent = `⏭ Próximo: ${prox.nome} às ${prox.inicio}h`;
+        if (userStarted && forcePlay) {
+          await startPlayback();
+        }
+      }
+    } catch (err) {
+      console.error(err);
+      log("⚠️ Erro ao atualizar programa.");
+      setStatus("Erro ao carregar a programação.", "error");
+    }
   }
 
-  // Atualiza faixa (artista + música)
-  async function atualizarFaixa() {
-    try {
-      const res = await fetch("/track_info");
-      if (!res.ok) return;
-      const d = await res.json();
-      let texto;
-      if (d.title && d.title !== "Tocando") {
-        texto = d.artist ? `🎵 ${d.artist} — ${d.title}` : `🎵 ${d.title}`;
-        trackNow.classList.remove("tocando");
+  function renderTrack(d) {
+    if (d.ok && d.title && d.title !== "Tocando") {
+      const main = d.artist ? `${d.artist} — ${d.title}` : d.title;
+      trackNow.textContent = `🎵 ${main}`;
+      trackNow.classList.remove("tocando");
+
+      const source = d.source === "shazam" ? "Shazam" : d.source === "scraping" ? "playlist online" : "desconhecido";
+      const album = d.album ? ` • Álbum: ${d.album}` : "";
+      trackMeta.textContent = `Fonte: ${source}${album}${d.cached ? " • cache" : ""}`;
+
+      setStatus(d.message || "Música identificada.", d.source === "shazam" ? "ok" : "warn");
+
+      if (d.cover) {
+        coverArt.src = d.cover;
+        coverArt.hidden = false;
+        coverFallback.hidden = true;
       } else {
-        texto = "🎧 Tocando";
-        trackNow.classList.add("tocando");
+        coverArt.hidden = true;
+        coverArt.removeAttribute("src");
+        if (defaultCoverImg) defaultCoverImg.src = DEFAULT_COVER;
+        coverFallback.hidden = false;
       }
-      if (trackNow.textContent !== texto) {
-        trackNow.textContent = texto;
-        log(`🎶 ${texto}`);
-      }
-    } catch {}
+
+      log(`🎶 ${main} (${source})`);
+    } else {
+      resetTrack("🎧 Tocando", d.message || "Ainda sem identificação.");
+      setStatus(d.message || "Não identificado.", "warn");
+      log("⚠️ Música ainda não identificada.");
+    }
   }
 
-  setInterval(atualizarPrograma, 60000);
-  setInterval(atualizarFaixa, 60000);
-  atualizarPrograma();
-  atualizarFaixa();
+  async function atualizarFaixa(force = false) {
+    if (identifying) return;
+    identifying = true;
+    identifyBtn.disabled = true;
+    identifyBtn.classList.add("loading");
 
-  // Botão automático
+    setStatus(force ? "A gravar excerto e a enviar ao Shazam…" : "A verificar música…", "loading");
+
+    try {
+      const res = await fetch(`/track_info${force ? "?force=1" : ""}`, { cache: "no-store" });
+      const d = await res.json();
+      renderTrack(d);
+      if (d.errors?.length) console.warn(d.errors);
+    } catch (err) {
+      console.error(err);
+      setStatus("Erro ao identificar. Confirma FFmpeg e shazamio no servidor.", "error");
+      log("❌ Erro no pedido de identificação.");
+    } finally {
+      identifying = false;
+      identifyBtn.disabled = false;
+      identifyBtn.classList.remove("loading");
+    }
+  }
+
+  identifyBtn.onclick = () => atualizarFaixa(true);
+
   autoBtn.onclick = () => {
     auto = !auto;
     autoBtn.classList.toggle("active", auto);
-    log(auto ? "🔄 Modo automático ligado" : "🛑 Modo automático desligado");
-    if (auto) atualizarPrograma();
+    log(auto ? "🔄 Modo automático ligado." : "🛑 Modo automático desligado.");
+    if (auto) atualizarPrograma(true, true);
   };
+
+  setInterval(() => atualizarPrograma(false, false), 60 * 1000);
+
+  // Identificação automática só depois de a rádio estar a tocar.
+  setInterval(() => {
+    if (!player.paused && !player.ended) atualizarFaixa(false);
+  }, 95 * 1000);
+
+  atualizarPrograma(true, true);
 });
-
-

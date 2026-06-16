@@ -3,66 +3,102 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>🎧 Rádio Pulse — O Ritmo da Tua Geração</title>
+  <title>🎧 Rádio Pulse Shazam — Modo Deus</title>
 
-  <!-- CSS principal -->
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
   <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
 
-  <!-- Favicon opcional -->
   <link rel="icon" href="https://upload.wikimedia.org/wikipedia/commons/5/54/Radio_icon.svg" type="image/svg+xml">
-</head>
-<body>
-  <!-- 🔹 TOPO -->
-  <header class="topbar">
-    <div class="logo">
-      <span>🎵</span>
-      <div>
-        <h1>Rádio Pulse <span id="weatherIcon">☀️</span></h1>
-        <p>O ritmo da tua geração</p>
-      </div>
-    </div>
 
-    <div class="right">
-      <div id="datetime">—</div>
-      <div id="weather" class="weather">🌤️ Lisboa • — °C</div>
-      <a href="/grelha" class="grelha-btn">📅 Grelha</a>
-    </div>
+  <!-- Capa default usada pelo script.js -->
+  <script>
+    window.DEFAULT_COVER_URL = "{{ url_for('static', filename='default_cover.png') }}";
+  </script>
+</head>
+
+<body>
+  <div class="aurora aurora-a"></div>
+  <div class="aurora aurora-b"></div>
+  <div class="grid-bg"></div>
+
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="Rádio Pulse">
+      <span class="brand-orb">⚡</span>
+      <div>
+        <h1>Rádio Pulse</h1>
+        <p>Shazam live scanner</p>
+      </div>
+    </a>
+
+    <nav class="nav-actions">
+      <div id="datetime" class="pill">—</div>
+      <div id="weather" class="pill weather">🌤️ Lisboa • — °C</div>
+      <a href="/grelha" class="btn btn-soft">📅 Grelha</a>
+    </nav>
   </header>
 
-  <!-- 🔹 CONTEÚDO PRINCIPAL -->
-  <main class="container">
-    <h2 id="progNome">—</h2>
-    <p id="progDesc" class="desc">—</p>
-    <p id="proximoTxt" class="proximo">—</p>
+  <main class="shell">
+    <section class="hero-card">
+      <div class="hero-glow"></div>
 
-    <div id="trackNow" class="track-info tocando">🎧 Tocando</div>
+      <div class="station-row">
+        <span class="live-dot"></span>
+        <span id="stationLabel">Emissão automática</span>
+      </div>
 
-    <canvas id="equalizer" width="700" height="90"></canvas>
+      <h2 id="progNome">A ligar à Rádio Pulse…</h2>
+      <p id="progDesc" class="desc">A preparar stream, Shazam e equalizador.</p>
+      <p id="proximoTxt" class="proximo">—</p>
 
-    <audio id="player" autoplay controls crossorigin="anonymous"></audio>
+      <div class="now-card">
+        <div class="cover-wrap">
+          <img id="coverArt" src="" alt="Capa da música" hidden>
 
-    <!-- Botão modo automático (opcional, se quiseres de volta) -->
-    <div class="controls">
-      <button id="autoBtn" class="grelha-btn" style="margin-top:14px;">🔄 Modo Automático</button>
-    </div>
+          <div id="coverFallback" class="cover-fallback" aria-label="Capa default Rádio Pulse">
+            <img
+              id="defaultCoverImg"
+              src="{{ url_for('static', filename='default_cover.png') }}"
+              alt="Capa default Rádio Pulse"
+              onerror="this.src='/static/default_cover.png'"
+            >
+          </div>
+        </div>
+
+        <div class="track-box">
+          <div class="kicker">Agora no ar</div>
+          <div id="trackNow" class="track-title tocando">🎧 Tocando</div>
+          <div id="trackMeta" class="track-meta">O Shazam vai analisar o áudio real da rádio.</div>
+          <div id="shazamStatus" class="status-line">Pronto para identificar.</div>
+        </div>
+      </div>
+
+      <canvas id="equalizer" width="920" height="150"></canvas>
+
+      <!-- Player fino azul -->
+      <div class="player-shell">
+        <audio id="player" controls preload="none"></audio>
+      </div>
+
+      <div class="controls">
+        <button id="playBtn" class="btn btn-primary">▶ Ligar rádio</button>
+        <button id="identifyBtn" class="btn btn-neon">🧠 Identificar com Shazam</button>
+        <button id="autoBtn" class="btn btn-soft active">🔄 Automático</button>
+      </div>
+    </section>
   </main>
 
-  <!-- 🔹 LOGS -->
-  <div id="logPanel" class="log-panel" style="display:block;">
+  <aside id="logPanel" class="log-panel">
     <div class="log-title">
-      📡 Rádio Pulse — Logs
-      <button id="toggleLogs" class="toggle-logs">✖ Ocultar</button>
+      <span>📡 Consola Pulse</span>
+      <button id="toggleLogs" class="mini-btn">✖</button>
     </div>
     <div id="logContent"></div>
-  </div>
+  </aside>
 
-  <button id="showLogsBtn" class="show-logs" style="display:none;">📋 Mostrar Logs</button>
+  <button id="showLogsBtn" class="show-logs">📋 Logs</button>
 
-  <!-- 🔹 RODAPÉ -->
-  <footer>© 2025 Rádio Pulse — O ritmo da tua geração</footer>
+  <footer>© 2026 Rádio Pulse — Modo Deus Neon</footer>
 
-  <!-- JS principal -->
   <script src="{{ url_for('static', filename='script.js') }}"></script>
 </body>
 </html>
