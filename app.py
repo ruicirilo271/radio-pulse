@@ -24,7 +24,7 @@ from typing import Any, Dict, Optional
 import pytz
 import requests
 from bs4 import BeautifulSoup
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, Response, abort, jsonify, render_template, request, stream_with_context
 
 try:
     from shazamio import Shazam
@@ -108,9 +108,31 @@ HEADERS = {
                   "(KHTML, like Gecko) Chrome/125.0 Safari/537.36"
 }
 
+# O spectrum analyzer real precisa que o áudio venha do mesmo domínio.
+# Por isso o player usa /stream/<RADIO>, que faz proxy do stream oficial.
+PLAYER_USES_PROXY = os.getenv("PLAYER_USES_PROXY", "1") not in {"0", "false", "False", "no", "NO"}
+
 # =============================
 # 🧭 Programação
 # =============================
+def _programa_publico(p: Dict[str, Any]) -> Dict[str, Any]:
+    """Devolve uma cópia do programa com URLs próprias para o browser.
+
+    - url: stream oficial direto.
+    - proxy_url: stream via Flask no mesmo domínio.
+    - stream_url_for_player: URL que o frontend deve usar no <audio>.
+
+    O proxy permite WebAudio/spectrum analyzer real porque evita bloqueios CORS
+    dos streams externos.
+    """
+    data = dict(p)
+    radio_key = data.get("radio", "COMERCIAL")
+    data["direct_url"] = data.get("url")
+    data["proxy_url"] = f"/stream/{radio_key}"
+    data["stream_url_for_player"] = data["proxy_url"] if PLAYER_USES_PROXY else data.get("url")
+    return data
+
+
 def programa_atual() -> Dict[str, Any]:
     agora = datetime.now(pytz.timezone("Europe/Lisbon"))
     hora = agora.hour
@@ -128,7 +150,7 @@ def programa_atual() -> Dict[str, Any]:
     proximos = sorted(PROGRAMAS, key=lambda x: x["inicio"])
     proximo = next((p for p in proximos if p["inicio"] > hora), proximos[0])
 
-    return {"atual": atual, "proximo": proximo}
+    return {"atual": _programa_publico(atual), "proximo": _programa_publico(proximo)}
 
 # =============================
 # 🧼 Utilitários
@@ -417,6 +439,59 @@ def identify_now():
     return jsonify(identificar_faixa(radio_key, force=True))
 
 
+@app.route("/stream/<radio_key>")
+def stream_radio(radio_key: str):
+    """Proxy de áudio para o player e para o spectrum analyzer real.
+
+    O browser só consegue analisar áudio real com WebAudio quando o ficheiro/stream
+    vem do mesmo domínio ou quando o servidor externo envia CORS. Como muitos
+    streams de rádio não enviam CORS, esta rota retransmite o áudio pelo Flask.
+    """
+    radio_key = (radio_key or "").upper().strip()
+    stream_url = STREAMS.get(radio_key)
+    if not stream_url:
+        abort(404)
+
+    upstream_headers = dict(HEADERS)
+    upstream_headers.update({
+        "Accept": "audio/*,*/*;q=0.8",
+        "Icy-MetaData": "0",
+        "Connection": "keep-alive",
+    })
+
+    try:
+        upstream = requests.get(
+            stream_url,
+            headers=upstream_headers,
+            stream=True,
+            timeout=(10, 30),
+            allow_redirects=True,
+        )
+        upstream.raise_for_status()
+    except Exception as e:
+        print(f"❌ Erro ao abrir stream {radio_key}: {e}")
+        abort(502)
+
+    content_type = upstream.headers.get("Content-Type") or "audio/mpeg"
+
+    def generate():
+        try:
+            for chunk in upstream.iter_content(chunk_size=32 * 1024):
+                if chunk:
+                    yield chunk
+        finally:
+            upstream.close()
+
+    response = Response(stream_with_context(generate()), content_type=content_type)
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    response.headers["X-Accel-Buffering"] = "no"
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Accept-Ranges"] = "none"
+    return response
+
+
 @app.route("/status")
 def status():
     return jsonify({
@@ -430,6 +505,8 @@ def status():
         "warmup_seconds": WARMUP_SECONDS,
         "shazam_attempts": SHAZAM_ATTEMPTS,
         "cache_ttl": TRACK_CACHE_TTL,
+        "player_uses_proxy": PLAYER_USES_PROXY,
+        "real_spectrum_route": "/stream/<radio_key>",
     })
 
 

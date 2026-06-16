@@ -34,14 +34,21 @@ document.addEventListener("DOMContentLoaded", () => {
   let hls = null;
   let userStarted = false;
   let identifying = false;
-  let eqStarted = false;
+
+  // Spectrum real
+  let audioCtx = null;
+  let analyser = null;
+  let sourceNode = null;
+  let frequencyData = null;
+  let smoothArray = null;
+  let usingRealSpectrum = false;
+  let spectrumLoopStarted = false;
 
   function log(msg) {
     const ts = new Date().toLocaleTimeString("pt-PT", { hour12: false });
     const line = document.createElement("div");
     line.innerHTML = `<b>[${ts}]</b> ${msg}`;
     logContent.prepend(line);
-
     while (logContent.childElementCount > 35) logContent.lastChild.remove();
   }
 
@@ -104,8 +111,8 @@ document.addEventListener("DOMContentLoaded", () => {
   function resizeCanvas() {
     const rect = canvas.getBoundingClientRect();
     const ratio = window.devicePixelRatio || 1;
-    canvas.width = Math.floor(rect.width * ratio);
-    canvas.height = Math.floor(rect.height * ratio);
+    canvas.width = Math.max(1, Math.floor(rect.width * ratio));
+    canvas.height = Math.max(1, Math.floor(rect.height * ratio));
     ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
   }
 
@@ -123,28 +130,16 @@ document.addEventListener("DOMContentLoaded", () => {
     c.closePath();
   }
 
-  // IMPORTANTE:
-  // Não usamos createMediaElementSource/WebAudio para o equalizer.
-  // Muitos streams de rádio não enviam CORS e o browser fica sem som quando
-  // o áudio é ligado ao WebAudio. Assim a rádio toca sempre e o equalizer anima.
-  function drawEq() {
-    requestAnimationFrame(drawEq);
-
-    const rect = canvas.getBoundingClientRect();
-    const w = rect.width;
-    const h = rect.height;
-    const bars = player.paused ? 76 : 92;
+  function drawIdleSpectrum(w, h) {
+    const bars = player.paused ? 72 : 88;
     const now = performance.now();
-
-    ctx.clearRect(0, 0, w, h);
 
     for (let i = 0; i < bars; i++) {
       const x = (i * w) / bars;
-      const base = player.paused ? 0.20 : 0.42;
       const wave1 = Math.sin(i * 0.38 + now / 310) * 0.5 + 0.5;
       const wave2 = Math.sin(i * 0.11 + now / 170) * 0.5 + 0.5;
       const pulse = player.paused ? wave1 * 0.16 : (wave1 * 0.55 + wave2 * 0.45);
-      const bh = Math.max(6, (base + pulse * 0.72) * h * (player.paused ? 0.45 : 0.95));
+      const bh = Math.max(6, (0.18 + pulse * 0.65) * h * (player.paused ? 0.45 : 0.95));
       const hue = (188 + i * 2.7 + now / 45) % 360;
 
       ctx.shadowColor = `hsla(${hue}, 100%, 65%, ${player.paused ? ".25" : ".70"})`;
@@ -159,13 +154,93 @@ document.addEventListener("DOMContentLoaded", () => {
       roundRect(ctx, x + 2, h - bh, Math.max(3, w / bars - 4), bh, 9);
       ctx.fill();
     }
+  }
+
+  function drawRealSpectrum(w, h) {
+    if (!analyser || !frequencyData || !smoothArray) {
+      drawIdleSpectrum(w, h);
+      return;
+    }
+
+    analyser.getByteFrequencyData(frequencyData);
+    const bars = 96;
+    const step = Math.max(1, Math.floor(frequencyData.length / bars));
+    const now = performance.now();
+
+    for (let i = 0; i < bars; i++) {
+      let avg = 0;
+      const start = i * step;
+      for (let j = 0; j < step; j++) avg += frequencyData[start + j] || 0;
+      avg /= step;
+
+      smoothArray[i] += (avg - smoothArray[i]) * 0.22;
+      const energy = Math.min(1, smoothArray[i] / 255);
+      const bh = Math.max(5, Math.pow(energy, 0.72) * h * 1.18);
+      const x = (i * w) / bars;
+      const hue = (188 + i * 2.8 + now / 55) % 360;
+
+      ctx.shadowColor = `hsla(${hue}, 100%, 65%, .72)`;
+      ctx.shadowBlur = 18;
+
+      const grad = ctx.createLinearGradient(0, h - bh, 0, h);
+      grad.addColorStop(0, `hsl(${hue}, 100%, 76%)`);
+      grad.addColorStop(0.55, `hsl(${(hue + 52) % 360}, 100%, 58%)`);
+      grad.addColorStop(1, `hsl(${(hue + 105) % 360}, 100%, 42%)`);
+
+      ctx.fillStyle = grad;
+      roundRect(ctx, x + 2, h - bh, Math.max(3, w / bars - 4), bh, 9);
+      ctx.fill();
+    }
+  }
+
+  function drawSpectrum() {
+    requestAnimationFrame(drawSpectrum);
+
+    const rect = canvas.getBoundingClientRect();
+    const w = rect.width;
+    const h = rect.height;
+    ctx.clearRect(0, 0, w, h);
+
+    if (usingRealSpectrum && !player.paused) drawRealSpectrum(w, h);
+    else drawIdleSpectrum(w, h);
 
     ctx.shadowBlur = 0;
   }
 
-  if (!eqStarted) {
-    eqStarted = true;
-    drawEq();
+  function ensureRealSpectrum() {
+    try {
+      if (!audioCtx) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      }
+
+      if (!sourceNode) {
+        analyser = audioCtx.createAnalyser();
+        analyser.fftSize = 1024;
+        analyser.minDecibels = -92;
+        analyser.maxDecibels = -8;
+        analyser.smoothingTimeConstant = 0.72;
+
+        sourceNode = audioCtx.createMediaElementSource(player);
+        sourceNode.connect(analyser);
+        analyser.connect(audioCtx.destination);
+
+        frequencyData = new Uint8Array(analyser.frequencyBinCount);
+        smoothArray = new Float32Array(128);
+      }
+
+      if (audioCtx.state === "suspended") audioCtx.resume();
+      usingRealSpectrum = true;
+      log("🎚️ Spectrum analyzer real ligado ao áudio da rádio.");
+    } catch (err) {
+      console.warn(err);
+      usingRealSpectrum = false;
+      log("⚠️ Não consegui ligar o spectrum real. Mantive animação visual.");
+    }
+  }
+
+  if (!spectrumLoopStarted) {
+    spectrumLoopStarted = true;
+    drawSpectrum();
   }
 
   function resetTrack(title, meta) {
@@ -201,8 +276,8 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   async function startPlayback() {
-    if (!currentStreamUrl && currentProgram?.url) {
-      setPlayerSource(currentProgram.url);
+    if (!currentStreamUrl && currentProgram?.stream_url_for_player) {
+      setPlayerSource(currentProgram.stream_url_for_player);
     }
 
     if (!player.src && !hls) {
@@ -211,9 +286,10 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     try {
+      ensureRealSpectrum();
       await player.play();
       playBtn.textContent = "⏸ Pausar rádio";
-      setStatus("Rádio ligada. Podes identificar com Shazam.", "ok");
+      setStatus(usingRealSpectrum ? "Rádio ligada com spectrum real." : "Rádio ligada. Spectrum visual ativo.", "ok");
       log("✅ Rádio ligada.");
     } catch (err) {
       console.error(err);
@@ -224,12 +300,13 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   player.addEventListener("play", () => {
+    ensureRealSpectrum();
     playBtn.textContent = "⏸ Pausar rádio";
   });
 
   player.addEventListener("playing", () => {
     playBtn.textContent = "⏸ Pausar rádio";
-    setStatus("Rádio ligada. Podes identificar com Shazam.", "ok");
+    setStatus(usingRealSpectrum ? "Rádio ligada com spectrum real." : "Rádio ligada. Spectrum visual ativo.", "ok");
   });
 
   player.addEventListener("pause", () => {
@@ -274,18 +351,15 @@ document.addEventListener("DOMContentLoaded", () => {
       proximoTxt.textContent = `⏭ Próximo: ${prox.nome} às ${String(prox.inicio).padStart(2, "0")}h`;
 
       const changed = lastProgramName !== atual.nome;
+      const playerUrl = atual.stream_url_for_player || atual.proxy_url || atual.url;
+
       if (forceReload || changed || !currentStreamUrl) {
         log(`🎙️ Programa ativo: ${atual.nome} (${atual.radio})`);
-        setPlayerSource(atual.url);
+        setPlayerSource(playerUrl);
         lastProgramName = atual.nome;
 
-        if (changed) {
-          resetTrack("🎧 A aguardar identificação…", "Novo programa carregado.");
-        }
-
-        if (userStarted && forcePlay) {
-          await startPlayback();
-        }
+        if (changed) resetTrack("🎧 A aguardar identificação…", "Novo programa carregado.");
+        if (userStarted && forcePlay) await startPlayback();
       }
     } catch (err) {
       console.error(err);
