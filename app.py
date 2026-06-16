@@ -108,9 +108,14 @@ HEADERS = {
                   "(KHTML, like Gecko) Chrome/125.0 Safari/537.36"
 }
 
-# O spectrum analyzer real precisa que o áudio venha do mesmo domínio.
-# Por isso o player usa /stream/<RADIO>, que faz proxy do stream oficial.
-PLAYER_USES_PROXY = os.getenv("PLAYER_USES_PROXY", "1") not in {"0", "false", "False", "no", "NO"}
+# IMPORTANTE:
+# O player NÃO deve usar o proxy por defeito.
+# Motivo: em Vercel/serverless e até no Flask local, um proxy de rádio contínuo
+# pode ser cortado por timeout/ligação e o browser mostra erro no áudio.
+#
+# Modo estável (recomendado): PLAYER_USES_PROXY=0 -> o <audio> toca o stream oficial direto.
+# Modo spectrum real local: PLAYER_USES_PROXY=1 -> áudio passa por /stream/<RADIO>, mas pode cair.
+PLAYER_USES_PROXY = os.getenv("PLAYER_USES_PROXY", "0") not in {"0", "false", "False", "no", "NO"}
 
 # =============================
 # 🧭 Programação
@@ -122,14 +127,16 @@ def _programa_publico(p: Dict[str, Any]) -> Dict[str, Any]:
     - proxy_url: stream via Flask no mesmo domínio.
     - stream_url_for_player: URL que o frontend deve usar no <audio>.
 
-    O proxy permite WebAudio/spectrum analyzer real porque evita bloqueios CORS
-    dos streams externos.
+    Por defeito usamos o stream direto, porque é muito mais estável.
+    O proxy fica disponível apenas para testes locais de spectrum real.
     """
     data = dict(p)
     radio_key = data.get("radio", "COMERCIAL")
     data["direct_url"] = data.get("url")
     data["proxy_url"] = f"/stream/{radio_key}"
     data["stream_url_for_player"] = data["proxy_url"] if PLAYER_USES_PROXY else data.get("url")
+    data["player_mode"] = "proxy-real-spectrum" if PLAYER_USES_PROXY else "direct-stable"
+    data["spectrum_real_available"] = bool(PLAYER_USES_PROXY)
     return data
 
 
@@ -557,6 +564,8 @@ def status():
         "shazam_attempts": SHAZAM_ATTEMPTS,
         "cache_ttl": TRACK_CACHE_TTL,
         "player_uses_proxy": PLAYER_USES_PROXY,
+        "player_mode": "proxy-real-spectrum" if PLAYER_USES_PROXY else "direct-stable",
+        "stream_stability": "stable direct stream" if not PLAYER_USES_PROXY else "proxy stream may disconnect on serverless",
         "real_spectrum_route": "/stream/<radio_key>",
     })
 

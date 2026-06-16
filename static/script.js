@@ -48,6 +48,7 @@ document.addEventListener("DOMContentLoaded", () => {
   let usingRealSpectrum = false;
   let spectrumLoopStarted = false;
   let realSpectrumLogged = false;
+  let stableSpectrumLogged = false;
 
   function log(msg) {
     const ts = new Date().toLocaleTimeString("pt-PT", { hour12: false });
@@ -247,6 +248,38 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
+
+  function isInternalStreamUrl(url) {
+    if (!url) return false;
+    try {
+      const u = new URL(url, window.location.origin);
+      return u.origin === window.location.origin && u.pathname.startsWith("/stream/");
+    } catch {
+      return false;
+    }
+  }
+
+  function realSpectrumAllowed() {
+    const url = getProgramPlayerUrl() || currentBaseUrl || player.currentSrc || player.src;
+    return isInternalStreamUrl(url);
+  }
+
+  function maybeEnableRealSpectrum() {
+    // Só ligamos WebAudio quando o áudio vem do nosso domínio (/stream/...).
+    // Em streams externos diretos, o browser pode cortar/mutar o som por CORS.
+    // Por isso, no modo estável, mantemos o player direto e usamos spectrum visual.
+    if (realSpectrumAllowed()) {
+      ensureRealSpectrum();
+      return;
+    }
+
+    usingRealSpectrum = false;
+    if (!stableSpectrumLogged) {
+      log("🎚️ Modo estável ativo: rádio direta sem proxy. Spectrum visual para não cortar a emissão.");
+      stableSpectrumLogged = true;
+    }
+  }
+
   if (!spectrumLoopStarted) {
     spectrumLoopStarted = true;
     drawSpectrum();
@@ -337,10 +370,10 @@ document.addEventListener("DOMContentLoaded", () => {
     try {
       const url = getProgramPlayerUrl();
       setPlayerSource(url, true);
-      ensureRealSpectrum();
+      maybeEnableRealSpectrum();
       await player.play();
       playBtn.textContent = "⏸ Pausar rádio";
-      setStatus("Rádio religada automaticamente com spectrum real.", "ok");
+      setStatus(usingRealSpectrum ? "Rádio religada automaticamente com spectrum real." : "Rádio religada em modo estável.", "ok");
       log(`✅ Rádio religada automaticamente (${reason}).`);
     } catch (err) {
       console.error(err);
@@ -357,11 +390,11 @@ document.addEventListener("DOMContentLoaded", () => {
     if (url) setPlayerSource(url, forceFresh);
 
     try {
-      ensureRealSpectrum();
+      maybeEnableRealSpectrum();
       await player.play();
       wantPlaying = true;
       playBtn.textContent = "⏸ Pausar rádio";
-      setStatus(usingRealSpectrum ? "Rádio ligada com spectrum real." : "Rádio ligada. Spectrum visual ativo.", "ok");
+      setStatus(usingRealSpectrum ? "Rádio ligada com spectrum real." : "Rádio ligada em modo estável. Spectrum visual ativo.", "ok");
       log("✅ Rádio ligada.");
     } catch (err) {
       console.error(err);
@@ -373,7 +406,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   player.addEventListener("play", () => {
     if (userStarted) wantPlaying = true;
-    ensureRealSpectrum();
+    maybeEnableRealSpectrum();
     playBtn.textContent = "⏸ Pausar rádio";
   });
 
@@ -382,7 +415,7 @@ document.addEventListener("DOMContentLoaded", () => {
     lastTimeUpdate = Date.now();
     clearReconnectTimer();
     playBtn.textContent = "⏸ Pausar rádio";
-    setStatus(usingRealSpectrum ? "Rádio ligada com spectrum real." : "Rádio ligada. Spectrum visual ativo.", "ok");
+    setStatus(usingRealSpectrum ? "Rádio ligada com spectrum real." : "Rádio ligada em modo estável. Spectrum visual ativo.", "ok");
   });
 
   player.addEventListener("timeupdate", () => {

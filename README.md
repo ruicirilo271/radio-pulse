@@ -1,98 +1,22 @@
-# Rádio Pulse — Shazam Live Scanner — Modo Deus
+# Rádio Pulse — Vercel / PC — versão estável
 
-Aplicação Flask pronta para publicar no Vercel.
+Esta versão foi ajustada para resolver o problema da rádio desligar passado algum tempo.
 
-A Rádio Pulse muda automaticamente de stream conforme a grelha de programação, toca a emissão no browser, mostra spectrum analyzer real, capa default e tenta identificar a música atual com Shazam a partir de um pequeno excerto real do áudio.
+## O que mudou
 
-## Estrutura do projeto
+- O player voltou a tocar o stream oficial direto da rádio.
+- O proxy `/stream/<RADIO>` continua no `app.py`, mas fica desligado por defeito.
+- No Vercel, `PLAYER_USES_PROXY=0`, porque serverless não é indicado para retransmitir rádio contínua.
+- O auto-reconnect continua ativo para recuperar falhas normais do browser/stream.
+- O spectrum fica visual no modo estável, para não cortar nem silenciar a rádio por causa de CORS.
 
-```txt
-radio_pulse_vercel/
-├── app.py
-├── requirements.txt
-├── vercel.json
-├── README.md
-├── .gitignore
-├── .vercelignore
-├── static/
-│   ├── default_cover.png
-│   ├── script.js
-│   └── style.css
-└── templates/
-    ├── grelha.html
-    └── index.html
-```
+## Porque isto era necessário
 
-## Rotas principais
+O spectrum analyzer 100% real no browser exige WebAudio. Muitos streams de rádio externos não enviam permissões CORS. A alternativa era passar o áudio por `/stream/<RADIO>`, mas isso cria uma ligação contínua no Flask/Vercel que pode cair e causar o erro do player.
 
-```txt
-/                 Página principal da rádio
-/grelha           Grelha de programação
-/status           Diagnóstico: FFmpeg, ShazamIO, /tmp, cache
-/health           Health check simples para testar o deploy
-/track_info       Identificação com cache
-/track_info?force=1  Força nova identificação
-/identify_now     Força identificação da rádio atual
-/stream/<RADIO>   Proxy do stream para player + spectrum real
-```
+Por isso, a versão final dá prioridade à rádio não desligar.
 
-## Preparação feita para Vercel
-
-Esta versão já vem preparada com:
-
-- `app.py` na raiz, com a variável Flask `app` exposta.
-- `templates/` e `static/` organizados corretamente.
-- `vercel.json` com `@vercel/python` e runtime Python 3.11.
-- `imageio-ffmpeg` no `requirements.txt`, para ter FFmpeg disponível mesmo quando o sistema não tem `ffmpeg` instalado.
-- Gravação temporária em `/tmp`, que é o local correto para ficheiros temporários em ambiente serverless.
-- Player por proxy interno `/stream/<RADIO>`, para o browser conseguir fazer spectrum analyzer real com WebAudio.
-- CSS e JS com caminhos absolutos `/static/...` e versão no URL para evitar cache e falhas de `url_for`/estrutura.
-- Amostra curta para o Shazam no Vercel: 8 segundos + 1 segundo de warmup.
-- Apenas 1 tentativa de Shazam por pedido no Vercel, para reduzir risco de timeout.
-
-## Publicar no Vercel
-
-1. Cria um repositório no GitHub.
-2. Coloca estes ficheiros na raiz do repositório.
-3. Vai ao Vercel.
-4. Clica em **Add New Project**.
-5. Importa o repositório.
-6. Em **Framework Preset**, deixa como **Other** ou automático.
-7. Faz **Deploy**.
-
-Depois de publicado, testa:
-
-```txt
-https://teu-dominio.vercel.app/health
-https://teu-dominio.vercel.app/status
-```
-
-Se `/status` mostrar `ffmpeg: true` e `shazamio: true`, a parte principal está pronta.
-
-## Variáveis de ambiente opcionais
-
-No Vercel, podes configurar estas variáveis em **Settings → Environment Variables**:
-
-```txt
-PYTHONUNBUFFERED=1
-SHAZAM_SAMPLE_SECONDS=8
-SHAZAM_WARMUP_SECONDS=1
-SHAZAM_ATTEMPTS=1
-TRACK_CACHE_TTL=90
-PLAYER_USES_PROXY=1
-```
-
-Para maior precisão no teu PC, podes usar:
-
-```txt
-SHAZAM_SAMPLE_SECONDS=18
-SHAZAM_WARMUP_SECONDS=4
-SHAZAM_ATTEMPTS=3
-```
-
-## Correr localmente
-
-Instala Python 3.11, cria o ambiente virtual e instala as dependências:
+## Correr no PC
 
 ```bash
 python -m venv .venv
@@ -101,68 +25,40 @@ pip install -r requirements.txt
 python app.py
 ```
 
-Abre:
+Abrir:
 
 ```txt
 http://127.0.0.1:8200
 ```
 
-## Nota importante sobre Shazam no Vercel
+## Publicar no Vercel
 
-A aplicação está preparada para Vercel, mas a identificação por áudio depende de rede, stream da rádio, FFmpeg e tempo de execução da função. Se a página tocar rádio mas a identificação demorar ou falhar, reduz `SHAZAM_SAMPLE_SECONDS` para `6` ou usa a app localmente/Render para maior estabilidade.
+1. Envia todos estes ficheiros para o GitHub.
+2. Importa o repositório no Vercel.
+3. Não cries variável `TZ`.
+4. Mantém `PLAYER_USES_PROXY=0`.
 
-## Correção: style não carregava e spectrum não era real
+## Rotas úteis
 
-Nesta versão os ficheiros estáticos usam caminhos absolutos:
+- `/` — emissão
+- `/grelha` — grelha
+- `/status` — diagnóstico
+- `/health` — health check
+- `/track_info` — identificação com cache
+- `/identify_now` — força identificação
 
-```txt
-/static/style.css?v=20260616-spectrum-real
-/static/script.js?v=20260616-spectrum-real
-/static/default_cover.png?v=20260616-spectrum-real
+## Modo experimental de spectrum real local
+
+Só para testar no PC, podes tentar:
+
+```bash
+set PLAYER_USES_PROXY=1
+python app.py
 ```
 
-Também simplifiquei o `vercel.json`: agora todas as rotas passam pelo Flask, incluindo `/static/...`. Assim o próprio Flask serve o CSS/JS/imagens e evita o erro de o estilo não ser lido no Vercel.
+Mas se a rádio voltar a desligar, volta para:
 
-O spectrum analyzer voltou a ser real. O frontend usa WebAudio (`createMediaElementSource`) e o player toca através da rota interna:
-
-```txt
-/stream/COMERCIAL
-/stream/CIDADEFM
-/stream/RENASCENCA
-/stream/RECORDFM
+```bash
+set PLAYER_USES_PROXY=0
+python app.py
 ```
-
-Isto é necessário porque muitos streams externos não enviam CORS. Ao passar pelo proxy Flask no mesmo domínio, o browser consegue analisar o áudio real da rádio.
-
-Se quiseres voltar a usar o stream direto, coloca esta variável:
-
-```txt
-PLAYER_USES_PROXY=0
-```
-
-Mas nesse modo o spectrum real pode deixar de funcionar por bloqueio CORS.
-
-## Correção Vercel — variável TZ
-
-A Vercel não permite configurar a variável `TZ`, porque é reservada pelo runtime.
-Esta versão já removeu `TZ` do `vercel.json`. A app continua a usar a hora de Portugal diretamente no código com `pytz.timezone("Europe/Lisbon")`.
-
-No painel da Vercel, não cries a variável `TZ`.
-
-## Correção: rádio caía passado algum tempo
-
-Nesta versão foi corrigido o erro em que o player mostrava:
-
-```txt
-Erro no player de áudio. Experimenta recarregar a página.
-```
-
-Alterações feitas:
-
-- O proxy `/stream/<RADIO>` deixou de usar timeout de leitura de 30 segundos.
-- O proxy agora tenta reabrir automaticamente o stream original se a ligação cair.
-- O frontend tem auto-reconnect: quando recebe `error`, `stalled`, `ended` ou fica muito tempo sem progresso no áudio, religa sozinho.
-- Cada religação usa cache-buster no URL `/stream/<RADIO>?r=...` para forçar uma ligação nova.
-- O utilizador já não precisa de voltar a clicar em **Ligar rádio** quando houver uma quebra momentânea.
-
-Nota: no Vercel, streams contínuos por proxy podem cair por limitação natural de serverless. Esta versão religa automaticamente, mas para rádio 24/7 estável o ideal continua a ser Render/Fly.io/VPS. No PC, esta versão deve ficar muito mais estável.

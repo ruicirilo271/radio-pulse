@@ -21,7 +21,7 @@
     "SHAZAM_WARMUP_SECONDS": "1",
     "SHAZAM_ATTEMPTS": "1",
     "TRACK_CACHE_TTL": "90",
-    "PLAYER_USES_PROXY": "1"
+    "PLAYER_USES_PROXY": "0"
   },
   "regions": [
     "fra1"
