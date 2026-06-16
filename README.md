@@ -1,22 +1,19 @@
-# Rádio Pulse — Vercel / PC — versão estável
+# Rádio Pulse — Vercel / PC — versão ultra estável
 
-Esta versão foi ajustada para resolver o problema da rádio desligar passado algum tempo.
+Esta versão foi ajustada para evitar que a rádio se desligue passado algum tempo.
 
-## O que mudou
+## O que foi alterado
 
-- O player voltou a tocar o stream oficial direto da rádio.
-- O proxy `/stream/<RADIO>` continua no `app.py`, mas fica desligado por defeito.
-- No Vercel, `PLAYER_USES_PROXY=0`, porque serverless não é indicado para retransmitir rádio contínua.
-- O auto-reconnect continua ativo para recuperar falhas normais do browser/stream.
-- O spectrum fica visual no modo estável, para não cortar nem silenciar a rádio por causa de CORS.
+- O player usa streams diretos, sem proxy Flask por defeito.
+- O proxy `/stream/<RADIO>` continua no código, mas fica desligado por defeito porque pode cair em Vercel/serverless.
+- O JavaScript agora faz cache-buster em cada nova ligação ao stream.
+- Se o stream falhar, o browser tenta religar automaticamente.
+- Se houver URLs alternativas para a rádio, a aplicação tenta a próxima URL.
+- O watchdog agressivo foi removido para não recarregar a rádio sem necessidade.
+- Eventos `waiting` e `stalled` já não cortam logo a emissão; a app espera antes de trocar de stream.
+- A identificação automática por Shazam foi espaçada para 4 minutos para não sobrecarregar o servidor.
 
-## Porque isto era necessário
-
-O spectrum analyzer 100% real no browser exige WebAudio. Muitos streams de rádio externos não enviam permissões CORS. A alternativa era passar o áudio por `/stream/<RADIO>`, mas isso cria uma ligação contínua no Flask/Vercel que pode cair e causar o erro do player.
-
-Por isso, a versão final dá prioridade à rádio não desligar.
-
-## Correr no PC
+## Como correr no PC
 
 ```bash
 python -m venv .venv
@@ -25,40 +22,32 @@ pip install -r requirements.txt
 python app.py
 ```
 
-Abrir:
+Abre:
 
 ```txt
 http://127.0.0.1:8200
 ```
 
-## Publicar no Vercel
+## Vercel
 
-1. Envia todos estes ficheiros para o GitHub.
-2. Importa o repositório no Vercel.
-3. Não cries variável `TZ`.
-4. Mantém `PLAYER_USES_PROXY=0`.
+Não cries a variável `TZ`, porque a Vercel não permite essa variável.
 
-## Rotas úteis
+Variáveis recomendadas:
 
-- `/` — emissão
-- `/grelha` — grelha
-- `/status` — diagnóstico
-- `/health` — health check
-- `/track_info` — identificação com cache
-- `/identify_now` — força identificação
-
-## Modo experimental de spectrum real local
-
-Só para testar no PC, podes tentar:
-
-```bash
-set PLAYER_USES_PROXY=1
-python app.py
+```txt
+PLAYER_USES_PROXY=0
+SHAZAM_SAMPLE_SECONDS=8
+SHAZAM_WARMUP_SECONDS=1
+SHAZAM_ATTEMPTS=1
+TRACK_CACHE_TTL=90
 ```
 
-Mas se a rádio voltar a desligar, volta para:
+## Spectrum analyzer
 
-```bash
-set PLAYER_USES_PROXY=0
-python app.py
+No modo ultra estável, o spectrum é visual/animado para não cortar a rádio. O spectrum real só deve ser usado localmente com:
+
+```txt
+PLAYER_USES_PROXY=1
 ```
+
+Se com `PLAYER_USES_PROXY=1` a rádio voltar a cair, usa sempre `PLAYER_USES_PROXY=0`.

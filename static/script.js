@@ -31,14 +31,17 @@ document.addEventListener("DOMContentLoaded", () => {
   let userStarted = false;
   let wantPlaying = false;
   let identifying = false;
+
   let currentProgram = null;
   let lastProgramName = null;
-  let currentBaseUrl = null;
+  let currentUrls = [];
+  let currentUrlIndex = 0;
+  let currentCleanUrl = null;
   let reconnectTimer = null;
   let reconnectAttempts = 0;
-  let lastTimeUpdate = Date.now();
-  let bufferTimer = null;
   let hls = null;
+  let softBufferTimer = null;
+  let firstAutoIdentifyDone = false;
 
   let audioCtx = null;
   let analyser = null;
@@ -46,19 +49,21 @@ document.addEventListener("DOMContentLoaded", () => {
   let frequencyData = null;
   let smoothArray = null;
   let usingRealSpectrum = false;
-  let spectrumLoopStarted = false;
   let realSpectrumLogged = false;
   let stableSpectrumLogged = false;
 
+  const GLOBAL_SAFE_FALLBACKS = [
+    "https://stream-icy.bauermedia.pt/comercial.aac",
+    "https://stream-icy.bauermedia.pt/cidade.mp3",
+  ];
+
   function log(msg) {
+    if (!logContent) return;
     const ts = new Date().toLocaleTimeString("pt-PT", { hour12: false });
     const line = document.createElement("div");
     line.innerHTML = `<b>[${ts}]</b> ${msg}`;
     logContent.prepend(line);
-
-    while (logContent.childElementCount > 40) {
-      logContent.lastChild.remove();
-    }
+    while (logContent.childElementCount > 50) logContent.lastChild.remove();
   }
 
   function setStatus(text, mode = "idle") {
@@ -139,8 +144,8 @@ document.addEventListener("DOMContentLoaded", () => {
     c.closePath();
   }
 
-  function drawIdleSpectrum(w, h) {
-    const bars = player.paused ? 72 : 88;
+  function drawVisualSpectrum(w, h) {
+    const bars = player.paused ? 72 : 92;
     const now = performance.now();
 
     for (let i = 0; i < bars; i++) {
@@ -167,7 +172,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function drawRealSpectrum(w, h) {
     if (!analyser || !frequencyData || !smoothArray) {
-      drawIdleSpectrum(w, h);
+      drawVisualSpectrum(w, h);
       return;
     }
 
@@ -210,9 +215,21 @@ document.addEventListener("DOMContentLoaded", () => {
     ctx.clearRect(0, 0, w, h);
 
     if (usingRealSpectrum && !player.paused) drawRealSpectrum(w, h);
-    else drawIdleSpectrum(w, h);
+    else drawVisualSpectrum(w, h);
 
     ctx.shadowBlur = 0;
+  }
+
+  drawSpectrum();
+
+  function isInternalStreamUrl(url) {
+    if (!url) return false;
+    try {
+      const u = new URL(url, window.location.origin);
+      return u.origin === window.location.origin && u.pathname.startsWith("/stream/");
+    } catch {
+      return false;
+    }
   }
 
   function ensureRealSpectrum() {
@@ -248,64 +265,47 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-
-  function isInternalStreamUrl(url) {
-    if (!url) return false;
-    try {
-      const u = new URL(url, window.location.origin);
-      return u.origin === window.location.origin && u.pathname.startsWith("/stream/");
-    } catch {
-      return false;
-    }
-  }
-
-  function realSpectrumAllowed() {
-    const url = getProgramPlayerUrl() || currentBaseUrl || player.currentSrc || player.src;
-    return isInternalStreamUrl(url);
-  }
-
   function maybeEnableRealSpectrum() {
-    // Só ligamos WebAudio quando o áudio vem do nosso domínio (/stream/...).
-    // Em streams externos diretos, o browser pode cortar/mutar o som por CORS.
-    // Por isso, no modo estável, mantemos o player direto e usamos spectrum visual.
-    if (realSpectrumAllowed()) {
+    const clean = currentCleanUrl || currentUrls[currentUrlIndex] || player.currentSrc || player.src;
+    if (isInternalStreamUrl(clean)) {
       ensureRealSpectrum();
       return;
     }
 
     usingRealSpectrum = false;
     if (!stableSpectrumLogged) {
-      log("🎚️ Modo estável ativo: rádio direta sem proxy. Spectrum visual para não cortar a emissão.");
+      log("🎚️ Modo ultra estável: stream direto. Spectrum visual para não cortar a rádio.");
       stableSpectrumLogged = true;
     }
   }
 
-  if (!spectrumLoopStarted) {
-    spectrumLoopStarted = true;
-    drawSpectrum();
-  }
-
-  function resetTrack(title, meta) {
-    trackNow.textContent = title;
-    trackNow.classList.add("tocando");
-    trackMeta.textContent = meta || "";
-    coverArt.hidden = true;
-    coverArt.removeAttribute("src");
-    if (defaultCoverImg) defaultCoverImg.src = DEFAULT_COVER;
-    coverFallback.hidden = false;
-  }
-
-  function freshUrl(url) {
-    if (!url) return url;
-
-    // Só forçamos cache-buster no proxy interno. Assim cada religação abre uma
-    // ligação nova ao Flask e evita que o browser reutilize uma ligação quebrada.
-    if (url.startsWith("/stream/") || url.includes("/stream/")) {
-      const sep = url.includes("?") ? "&" : "?";
-      return `${url}${sep}r=${Date.now()}`;
+  function dedupeUrls(urls) {
+    const seen = new Set();
+    const out = [];
+    for (const url of urls || []) {
+      if (!url || seen.has(url)) continue;
+      seen.add(url);
+      out.push(url);
     }
+    return out;
+  }
 
-    return url;
+  function urlsForProgram(program) {
+    const fromServer = program?.player_urls || [];
+    const basics = [program?.stream_url_for_player, program?.direct_url, program?.url];
+    return dedupeUrls([...fromServer, ...basics, ...GLOBAL_SAFE_FALLBACKS]);
+  }
+
+  function cacheBust(url) {
+    if (!url) return url;
+    try {
+      const u = new URL(url, window.location.origin);
+      u.searchParams.set("_pulse", `${Date.now()}_${Math.floor(Math.random() * 99999)}`);
+      return u.toString();
+    } catch {
+      const sep = url.includes("?") ? "&" : "?";
+      return `${url}${sep}_pulse=${Date.now()}`;
+    }
   }
 
   function destroyHls() {
@@ -315,21 +315,11 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  function getProgramPlayerUrl() {
-    if (!currentProgram) return currentBaseUrl;
-    return currentProgram.stream_url_for_player || currentProgram.proxy_url || currentProgram.url || currentProgram.direct_url;
-  }
-
-  function setPlayerSource(url, forceFresh = false) {
-    if (!url) return;
-
-    const baseUrl = url;
-    const playableUrl = forceFresh ? freshUrl(baseUrl) : baseUrl;
-
-    if (!forceFresh && currentBaseUrl === baseUrl && player.src) return;
-
+  function setPlayerSource(cleanUrl) {
+    if (!cleanUrl) return;
     destroyHls();
-    currentBaseUrl = baseUrl;
+    currentCleanUrl = cleanUrl;
+    const playableUrl = cacheBust(cleanUrl);
 
     if (playableUrl.includes(".m3u8") && window.Hls && Hls.isSupported()) {
       hls = new Hls({ enableWorker: true, lowLatencyMode: true });
@@ -348,15 +338,26 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  function scheduleReconnect(reason = "stream interrompido", delay = 1600) {
-    if (!wantPlaying) return;
-    if (reconnectTimer) return;
+  function currentUrl() {
+    if (!currentUrls.length && currentProgram) currentUrls = urlsForProgram(currentProgram);
+    if (!currentUrls.length) return null;
+    return currentUrls[currentUrlIndex % currentUrls.length];
+  }
+
+  function nextUrl() {
+    if (!currentUrls.length && currentProgram) currentUrls = urlsForProgram(currentProgram);
+    if (!currentUrls.length) return null;
+    currentUrlIndex = (currentUrlIndex + 1) % currentUrls.length;
+    return currentUrls[currentUrlIndex];
+  }
+
+  function scheduleReconnect(reason = "stream interrompido", delay = 2000) {
+    if (!wantPlaying || reconnectTimer) return;
 
     reconnectAttempts += 1;
-    const wait = Math.min(delay + reconnectAttempts * 600, 7000);
-
-    setStatus(`A rádio caiu por instantes. A religar automaticamente… (${reconnectAttempts})`, "loading");
-    log(`🔁 ${reason}. A religar automaticamente em ${(wait / 1000).toFixed(1)}s...`);
+    const wait = Math.min(delay + reconnectAttempts * 800, 12000);
+    setStatus(`A rádio caiu por instantes. A tentar alternativa… (${reconnectAttempts})`, "loading");
+    log(`🔁 ${reason}. A tentar de novo em ${(wait / 1000).toFixed(1)}s...`);
 
     reconnectTimer = setTimeout(async () => {
       reconnectTimer = null;
@@ -368,12 +369,13 @@ document.addEventListener("DOMContentLoaded", () => {
     if (!wantPlaying) return;
 
     try {
-      const url = getProgramPlayerUrl();
-      setPlayerSource(url, true);
+      const url = reconnectAttempts <= 1 ? currentUrl() : nextUrl();
+      if (!url) throw new Error("sem URL de stream");
+      setPlayerSource(url);
       maybeEnableRealSpectrum();
       await player.play();
       playBtn.textContent = "⏸ Pausar rádio";
-      setStatus(usingRealSpectrum ? "Rádio religada automaticamente com spectrum real." : "Rádio religada em modo estável.", "ok");
+      setStatus("Rádio religada automaticamente.", "ok");
       log(`✅ Rádio religada automaticamente (${reason}).`);
     } catch (err) {
       console.error(err);
@@ -381,27 +383,43 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  async function startPlayback(forceFresh = false) {
-    if (!currentProgram) {
-      await atualizarPrograma(true, false);
+  async function startPlayback(forceNewSource = false) {
+    if (!currentProgram) await atualizarPrograma(true, false);
+
+    if (!currentUrls.length) currentUrls = urlsForProgram(currentProgram);
+    const url = currentUrl();
+    if (!url) {
+      setStatus("Não encontrei URL de stream para este programa.", "error");
+      return;
     }
 
-    const url = getProgramPlayerUrl();
-    if (url) setPlayerSource(url, forceFresh);
-
     try {
+      if (forceNewSource || !player.src || player.error || currentCleanUrl !== url) {
+        setPlayerSource(url);
+      }
+
       maybeEnableRealSpectrum();
       await player.play();
       wantPlaying = true;
       playBtn.textContent = "⏸ Pausar rádio";
-      setStatus(usingRealSpectrum ? "Rádio ligada com spectrum real." : "Rádio ligada em modo estável. Spectrum visual ativo.", "ok");
+      setStatus("Rádio ligada em modo ultra estável.", "ok");
       log("✅ Rádio ligada.");
     } catch (err) {
       console.error(err);
-      playBtn.textContent = "▶ Ligar rádio";
-      setStatus("Não consegui iniciar o stream. Vou tentar religar automaticamente.", "loading");
-      scheduleReconnect("falha ao iniciar", 1200);
+      wantPlaying = true;
+      playBtn.textContent = "⏸ A religar...";
+      scheduleReconnect("falha ao iniciar", 800);
     }
+  }
+
+  function resetTrack(title, meta) {
+    trackNow.textContent = title;
+    trackNow.classList.add("tocando");
+    trackMeta.textContent = meta || "";
+    coverArt.hidden = true;
+    coverArt.removeAttribute("src");
+    if (defaultCoverImg) defaultCoverImg.src = DEFAULT_COVER;
+    coverFallback.hidden = false;
   }
 
   player.addEventListener("play", () => {
@@ -412,14 +430,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
   player.addEventListener("playing", () => {
     reconnectAttempts = 0;
-    lastTimeUpdate = Date.now();
     clearReconnectTimer();
     playBtn.textContent = "⏸ Pausar rádio";
-    setStatus(usingRealSpectrum ? "Rádio ligada com spectrum real." : "Rádio ligada em modo estável. Spectrum visual ativo.", "ok");
-  });
-
-  player.addEventListener("timeupdate", () => {
-    lastTimeUpdate = Date.now();
+    setStatus("Rádio ligada em modo ultra estável.", "ok");
   });
 
   player.addEventListener("pause", () => {
@@ -427,35 +440,39 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   player.addEventListener("waiting", () => {
-    log("⏳ A carregar buffer da rádio...");
-    if (bufferTimer) clearTimeout(bufferTimer);
-    bufferTimer = setTimeout(() => {
-      if (wantPlaying && !player.paused && player.readyState < 3) {
-        scheduleReconnect("buffer preso", 500);
+    log("⏳ A rádio está a criar buffer...");
+    if (softBufferTimer) clearTimeout(softBufferTimer);
+    softBufferTimer = setTimeout(() => {
+      if (wantPlaying && !player.paused && player.readyState < 2) {
+        player.play().catch(() => scheduleReconnect("buffer sem resposta", 1000));
       }
-    }, 12000);
-  });
-
-  player.addEventListener("canplay", () => {
-    if (bufferTimer) clearTimeout(bufferTimer);
+    }, 25000);
   });
 
   player.addEventListener("stalled", () => {
-    log("⚠️ O stream ficou em espera. A tentar continuar...");
-    scheduleReconnect("stream em espera", 5000);
+    log("⚠️ Pequena paragem no buffer. Vou esperar antes de trocar de stream.");
+    if (softBufferTimer) clearTimeout(softBufferTimer);
+    softBufferTimer = setTimeout(() => {
+      if (wantPlaying && !player.paused && player.readyState < 2) {
+        scheduleReconnect("stream parado durante demasiado tempo", 1000);
+      }
+    }, 30000);
+  });
+
+  player.addEventListener("canplay", () => {
+    if (softBufferTimer) clearTimeout(softBufferTimer);
   });
 
   player.addEventListener("ended", () => {
     log("⚠️ O stream terminou. A religar...");
-    scheduleReconnect("stream terminou", 800);
+    if (wantPlaying) scheduleReconnect("stream terminou", 500);
   });
 
   player.addEventListener("error", () => {
     const code = player.error?.code || "?";
     log(`❌ Erro no player de áudio. Código: ${code}`);
-
     if (wantPlaying) {
-      scheduleReconnect("erro no player de áudio", 1200);
+      scheduleReconnect("erro no player de áudio", 700);
     } else {
       setStatus("Erro no player de áudio. Clica em Ligar rádio para tentar outra vez.", "error");
     }
@@ -464,13 +481,14 @@ document.addEventListener("DOMContentLoaded", () => {
   playBtn.onclick = async () => {
     userStarted = true;
 
-    if (player.paused || player.ended || player.error) {
+    if (player.paused || player.ended || player.error || !wantPlaying) {
       wantPlaying = true;
       await atualizarPrograma(true, false);
       await startPlayback(Boolean(player.error));
     } else {
       wantPlaying = false;
       clearReconnectTimer();
+      if (softBufferTimer) clearTimeout(softBufferTimer);
       player.pause();
       playBtn.textContent = "▶ Ligar rádio";
       setStatus("Rádio em pausa.", "idle");
@@ -478,8 +496,8 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   };
 
-  async function atualizarPrograma(forcePlay = false, forceReload = false) {
-    if (!auto && !forcePlay) return;
+  async function atualizarPrograma(force = false, reloadSource = false) {
+    if (!auto && !force) return;
 
     try {
       const res = await fetch("/programa_atual", { cache: "no-store" });
@@ -488,6 +506,7 @@ document.addEventListener("DOMContentLoaded", () => {
       const data = await res.json();
       const atual = data.atual;
       const prox = data.proximo;
+      const changed = lastProgramName !== atual.nome;
 
       currentProgram = atual;
       stationLabel.textContent = `${atual.radio} • emissão automática`;
@@ -495,16 +514,18 @@ document.addEventListener("DOMContentLoaded", () => {
       progDesc.textContent = atual.descricao;
       proximoTxt.textContent = `⏭ Próximo: ${prox.nome} às ${String(prox.inicio).padStart(2, "0")}h`;
 
-      const changed = lastProgramName !== atual.nome;
-      const playerUrl = getProgramPlayerUrl();
-
-      if (forceReload || changed || !currentBaseUrl) {
-        log(`🎙️ Programa ativo: ${atual.nome} (${atual.radio})`);
-        setPlayerSource(playerUrl, false);
+      if (changed || reloadSource || !currentUrls.length) {
+        currentUrls = urlsForProgram(atual);
+        currentUrlIndex = 0;
         lastProgramName = atual.nome;
+        log(`🎙️ Programa ativo: ${atual.nome} (${atual.radio})`);
 
         if (changed) resetTrack("🎧 A aguardar identificação…", "Novo programa carregado.");
-        if (userStarted && wantPlaying) await startPlayback(true);
+
+        if (userStarted && wantPlaying) {
+          setPlayerSource(currentUrl());
+          await startPlayback(false);
+        }
       }
     } catch (err) {
       console.error(err);
@@ -522,7 +543,6 @@ document.addEventListener("DOMContentLoaded", () => {
       const source = d.source === "shazam" ? "Shazam" : d.source === "scraping" ? "playlist online" : "desconhecido";
       const album = d.album ? ` • Álbum: ${d.album}` : "";
       trackMeta.textContent = `Fonte: ${source}${album}${d.cached ? " • cache" : ""}`;
-
       setStatus(d.message || "Música identificada.", d.source === "shazam" ? "ok" : "warn");
 
       if (d.cover) {
@@ -549,7 +569,6 @@ document.addEventListener("DOMContentLoaded", () => {
     identifying = true;
     identifyBtn.disabled = true;
     identifyBtn.classList.add("loading");
-
     setStatus(force ? "A gravar excerto e a enviar ao Shazam…" : "A verificar música…", "loading");
 
     try {
@@ -574,29 +593,37 @@ document.addEventListener("DOMContentLoaded", () => {
     auto = !auto;
     autoBtn.classList.toggle("active", auto);
     log(auto ? "🔄 Modo automático ligado." : "🛑 Modo automático desligado.");
-    if (auto) atualizarPrograma(true, true);
+    if (auto) atualizarPrograma(true, false);
   };
 
   setInterval(() => atualizarPrograma(false, false), 60 * 1000);
 
-  // Watchdog: se o browser ficar sem progresso no áudio, religa sozinho.
+  // Segurança: se o browser colocou em pausa sozinho, tenta retomar sem recarregar.
   setInterval(() => {
     if (!wantPlaying) return;
-
     if (player.error || player.ended) {
-      scheduleReconnect("watchdog detetou erro/fim", 800);
+      scheduleReconnect("verificação de segurança", 800);
       return;
     }
-
-    if (!player.paused && Date.now() - lastTimeUpdate > 35000) {
-      scheduleReconnect("watchdog sem progresso no áudio", 1200);
+    if (player.paused && userStarted) {
+      player.play().catch(() => scheduleReconnect("browser pausou a emissão", 1200));
     }
-  }, 15000);
+  }, 20000);
 
-  // Identificação automática só depois de a rádio estar a tocar.
+  // Identificação automática mais espaçada para não sobrecarregar o servidor.
   setInterval(() => {
     if (!player.paused && !player.ended && !player.error) atualizarFaixa(false);
-  }, 95 * 1000);
+  }, 4 * 60 * 1000);
 
-  atualizarPrograma(true, true);
+  atualizarPrograma(true, false);
+
+  // Primeira identificação só depois de algum tempo de rádio ligada.
+  player.addEventListener("playing", () => {
+    if (!firstAutoIdentifyDone) {
+      firstAutoIdentifyDone = true;
+      setTimeout(() => {
+        if (!player.paused && !player.ended && !player.error) atualizarFaixa(false);
+      }, 45000);
+    }
+  });
 });

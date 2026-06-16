@@ -39,8 +39,28 @@ app = Flask(__name__, template_folder="templates", static_folder="static")
 STREAMS = {
     "COMERCIAL": "https://stream-icy.bauermedia.pt/comercial.aac",
     "CIDADEFM": "https://stream-icy.bauermedia.pt/cidade.mp3",
-    "RENASCENCA": "https://playerservices.streamtheworld.com/api/livestream-redirect/RADIO_RENASCENCA_SC?dist=onlineradiobox",
+    "RENASCENCA": "https://playerservices.streamtheworld.com/api/livestream-redirect/RADIO_RENASCENCA_SC?dist=radio_pulse",
     "RECORDFM": "https://nl.digitalrm.pt:8010/stream",
+}
+
+# URLs alternativas para o player.
+# O browser passa para a próxima se uma emissão cair.
+# Isto evita ficar dependente de uma única ligação de stream.
+STREAM_ALTERNATES = {
+    "COMERCIAL": [
+        "https://stream-icy.bauermedia.pt/comercial.aac",
+    ],
+    "CIDADEFM": [
+        "https://stream-icy.bauermedia.pt/cidade.mp3",
+        "https://stream-icy.bauermedia.pt/cidade.aac",
+    ],
+    "RENASCENCA": [
+        "https://playerservices.streamtheworld.com/api/livestream-redirect/RADIO_RENASCENCA_SC?dist=radio_pulse",
+        "https://playerservices.streamtheworld.com/api/livestream-redirect/RADIO_RENASCENCA_SC",
+    ],
+    "RECORDFM": [
+        "https://nl.digitalrm.pt:8010/stream",
+    ],
 }
 
 # =============================
@@ -120,25 +140,47 @@ PLAYER_USES_PROXY = os.getenv("PLAYER_USES_PROXY", "0") not in {"0", "false", "F
 # =============================
 # 🧭 Programação
 # =============================
+def _dedupe_urls(urls):
+    seen = set()
+    out = []
+    for url in urls:
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        out.append(url)
+    return out
+
+
 def _programa_publico(p: Dict[str, Any]) -> Dict[str, Any]:
     """Devolve uma cópia do programa com URLs próprias para o browser.
 
-    - url: stream oficial direto.
-    - proxy_url: stream via Flask no mesmo domínio.
-    - stream_url_for_player: URL que o frontend deve usar no <audio>.
+    No modo estável, o player usa streams diretos e recebe uma lista de URLs.
+    Se uma URL cair, o JavaScript tenta a próxima e volta a ligar sozinho.
 
-    Por defeito usamos o stream direto, porque é muito mais estável.
-    O proxy fica disponível apenas para testes locais de spectrum real.
+    O proxy /stream/<RADIO> continua disponível apenas para teste local de
+    spectrum real. Não é recomendado no Vercel para áudio contínuo.
     """
     data = dict(p)
     radio_key = data.get("radio", "COMERCIAL")
-    data["direct_url"] = data.get("url")
-    data["proxy_url"] = f"/stream/{radio_key}"
-    data["stream_url_for_player"] = data["proxy_url"] if PLAYER_USES_PROXY else data.get("url")
-    data["player_mode"] = "proxy-real-spectrum" if PLAYER_USES_PROXY else "direct-stable"
-    data["spectrum_real_available"] = bool(PLAYER_USES_PROXY)
-    return data
+    direct_urls = _dedupe_urls(STREAM_ALTERNATES.get(radio_key, []) + [data.get("url")])
+    proxy_url = f"/stream/{radio_key}"
 
+    data["direct_url"] = data.get("url")
+    data["direct_urls"] = direct_urls
+    data["proxy_url"] = proxy_url
+
+    if PLAYER_USES_PROXY:
+        data["player_urls"] = [proxy_url]
+        data["stream_url_for_player"] = proxy_url
+        data["player_mode"] = "proxy-real-spectrum"
+        data["spectrum_real_available"] = True
+    else:
+        data["player_urls"] = direct_urls
+        data["stream_url_for_player"] = direct_urls[0] if direct_urls else data.get("url")
+        data["player_mode"] = "direct-ultra-stable"
+        data["spectrum_real_available"] = False
+
+    return data
 
 def programa_atual() -> Dict[str, Any]:
     agora = datetime.now(pytz.timezone("Europe/Lisbon"))
@@ -564,8 +606,9 @@ def status():
         "shazam_attempts": SHAZAM_ATTEMPTS,
         "cache_ttl": TRACK_CACHE_TTL,
         "player_uses_proxy": PLAYER_USES_PROXY,
-        "player_mode": "proxy-real-spectrum" if PLAYER_USES_PROXY else "direct-stable",
-        "stream_stability": "stable direct stream" if not PLAYER_USES_PROXY else "proxy stream may disconnect on serverless",
+        "player_mode": "proxy-real-spectrum" if PLAYER_USES_PROXY else "direct-ultra-stable",
+        "stream_stability": "direct stream with browser failover" if not PLAYER_USES_PROXY else "proxy stream may disconnect on serverless",
+        "stream_alternates": {k: len(v) for k, v in STREAM_ALTERNATES.items()},
         "real_spectrum_route": "/stream/<radio_key>",
     })
 
