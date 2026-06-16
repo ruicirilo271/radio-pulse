@@ -148,3 +148,21 @@ A Vercel não permite configurar a variável `TZ`, porque é reservada pelo runt
 Esta versão já removeu `TZ` do `vercel.json`. A app continua a usar a hora de Portugal diretamente no código com `pytz.timezone("Europe/Lisbon")`.
 
 No painel da Vercel, não cries a variável `TZ`.
+
+## Correção: rádio caía passado algum tempo
+
+Nesta versão foi corrigido o erro em que o player mostrava:
+
+```txt
+Erro no player de áudio. Experimenta recarregar a página.
+```
+
+Alterações feitas:
+
+- O proxy `/stream/<RADIO>` deixou de usar timeout de leitura de 30 segundos.
+- O proxy agora tenta reabrir automaticamente o stream original se a ligação cair.
+- O frontend tem auto-reconnect: quando recebe `error`, `stalled`, `ended` ou fica muito tempo sem progresso no áudio, religa sozinho.
+- Cada religação usa cache-buster no URL `/stream/<RADIO>?r=...` para forçar uma ligação nova.
+- O utilizador já não precisa de voltar a clicar em **Ligar rádio** quando houver uma quebra momentânea.
+
+Nota: no Vercel, streams contínuos por proxy podem cair por limitação natural de serverless. Esta versão religa automaticamente, mas para rádio 24/7 estável o ideal continua a ser Render/Fly.io/VPS. No PC, esta versão deve ficar muito mais estável.

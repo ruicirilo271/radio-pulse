@@ -439,19 +439,21 @@ def identify_now():
     return jsonify(identificar_faixa(radio_key, force=True))
 
 
-@app.route("/stream/<radio_key>")
-def stream_radio(radio_key: str):
-    """Proxy de áudio para o player e para o spectrum analyzer real.
+STREAM_CONTENT_TYPES = {
+    "COMERCIAL": "audio/aac",
+    "CIDADEFM": "audio/mpeg",
+    "RENASCENCA": "audio/mpeg",
+    "RECORDFM": "audio/mpeg",
+}
 
-    O browser só consegue analisar áudio real com WebAudio quando o ficheiro/stream
-    vem do mesmo domínio ou quando o servidor externo envia CORS. Como muitos
-    streams de rádio não enviam CORS, esta rota retransmite o áudio pelo Flask.
+
+def abrir_stream_upstream(stream_url: str, radio_key: str):
+    """Abre uma ligação ao stream original.
+
+    O timeout de leitura fica desativado para streams contínuos. Antes estava
+    limitado a 30 segundos e podia fazer o browser mostrar erro passado algum
+    tempo.
     """
-    radio_key = (radio_key or "").upper().strip()
-    stream_url = STREAMS.get(radio_key)
-    if not stream_url:
-        abort(404)
-
     upstream_headers = dict(HEADERS)
     upstream_headers.update({
         "Accept": "audio/*,*/*;q=0.8",
@@ -459,28 +461,76 @@ def stream_radio(radio_key: str):
         "Connection": "keep-alive",
     })
 
+    upstream = requests.get(
+        stream_url,
+        headers=upstream_headers,
+        stream=True,
+        timeout=(10, None),
+        allow_redirects=True,
+    )
+    upstream.raise_for_status()
+    return upstream
+
+
+@app.route("/stream/<radio_key>")
+def stream_radio(radio_key: str):
+    """Proxy de áudio para o player e para o spectrum analyzer real.
+
+    O browser só consegue analisar áudio real com WebAudio quando o ficheiro/stream
+    vem do mesmo domínio ou quando o servidor externo envia CORS. Como muitos
+    streams de rádio não enviam CORS, esta rota retransmite o áudio pelo Flask.
+
+    Esta versão tenta reabrir automaticamente a ligação à rádio se o upstream
+    cair. Assim o player não fica dependente de recarregar a página.
+    """
+    radio_key = (radio_key or "").upper().strip()
+    stream_url = STREAMS.get(radio_key)
+    if not stream_url:
+        abort(404)
+
     try:
-        upstream = requests.get(
-            stream_url,
-            headers=upstream_headers,
-            stream=True,
-            timeout=(10, 30),
-            allow_redirects=True,
-        )
-        upstream.raise_for_status()
+        first_upstream = abrir_stream_upstream(stream_url, radio_key)
     except Exception as e:
         print(f"❌ Erro ao abrir stream {radio_key}: {e}")
         abort(502)
 
-    content_type = upstream.headers.get("Content-Type") or "audio/mpeg"
+    content_type = (first_upstream.headers.get("Content-Type") or STREAM_CONTENT_TYPES.get(radio_key) or "audio/mpeg")
+    if "text" in content_type.lower() or "html" in content_type.lower():
+        content_type = STREAM_CONTENT_TYPES.get(radio_key, "audio/mpeg")
 
     def generate():
-        try:
-            for chunk in upstream.iter_content(chunk_size=32 * 1024):
-                if chunk:
-                    yield chunk
-        finally:
-            upstream.close()
+        upstream = first_upstream
+        reconnects = 0
+        max_reconnects = 60
+
+        while reconnects <= max_reconnects:
+            try:
+                for chunk in upstream.iter_content(chunk_size=16 * 1024):
+                    if chunk:
+                        yield chunk
+
+                print(f"⚠️ Stream {radio_key} terminou; a religar...")
+            except GeneratorExit:
+                break
+            except Exception as e:
+                print(f"⚠️ Stream {radio_key} caiu no proxy: {e}; a religar...")
+            finally:
+                try:
+                    upstream.close()
+                except Exception:
+                    pass
+
+            reconnects += 1
+            if reconnects > max_reconnects:
+                break
+
+            time.sleep(0.8)
+            try:
+                upstream = abrir_stream_upstream(stream_url, radio_key)
+                print(f"✅ Stream {radio_key} religado no proxy ({reconnects}).")
+            except Exception as e:
+                print(f"❌ Falha ao religar stream {radio_key}: {e}")
+                time.sleep(2)
 
     response = Response(stream_with_context(generate()), content_type=content_type)
     response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
@@ -489,6 +539,7 @@ def stream_radio(radio_key: str):
     response.headers["X-Accel-Buffering"] = "no"
     response.headers["Access-Control-Allow-Origin"] = "*"
     response.headers["Accept-Ranges"] = "none"
+    response.headers["Connection"] = "keep-alive"
     return response
 
 
